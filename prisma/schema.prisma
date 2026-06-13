@@ -1,0 +1,377 @@
+// =============================================================
+// prisma/schema.prisma
+// Sistema de Gestión de Acreditación SINEACE — UNT
+// Modelo CONEAU 2025 (Res. N.° 000106-2025-SINEACE/COSUSINEACE-P)
+// 14 entidades · Prisma 5+ · PostgreSQL 15+
+// =============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// =============================================================
+// ENUMS
+// =============================================================
+
+enum Rol {
+  SUPERADMIN
+  VICERRECTOR
+  DECANO
+  COORDINADOR_CALIDAD
+  EVALUADOR_EXTERNO
+}
+
+enum EstadoAcreditacion {
+  SOLICITUD
+  AUTOEVALUACION
+  EVALUACION_EXTERNA
+  CONDICIONAMIENTOS
+  RESOLUCION
+  ACREDITADA
+  NO_ACREDITADA
+  RENOVACION
+}
+
+enum EstadoCondicionamiento {
+  PENDIENTE
+  EN_PROCESO
+  CUMPLIDO
+  NO_CUMPLIDO
+}
+
+enum AccionAuditoria {
+  CREATE
+  UPDATE
+  DELETE
+}
+
+enum TipoDato {
+  PORCENTAJE
+  PROMEDIO
+  RAZON
+}
+
+enum FrecuenciaCalculo {
+  SEMESTRAL
+  ANUAL
+  BIENAL
+}
+
+enum TipoAlerta {
+  BAJO
+  CRITICO
+  TENDENCIA_NEGATIVA
+}
+
+// =============================================================
+// ENTIDADES BASE
+// =============================================================
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  nombre    String
+  apellido  String
+  rol       Rol
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones
+  facultadesDecano      Facultad[]          @relation("DecanoFacultad")
+  carrerasCoordinador   Carrera[]           @relation("CoordinadorCarrera")
+  acreditacionesCreadas Acreditacion[]      @relation("CreadorAcreditacion")
+  evidenciasSubidas     Evidencia[]
+  autoevaluaciones      Autoevaluacion[]
+  evaluacionesExternas  EvaluacionExterna[]
+  condicionamientos     Condicionamiento[]  @relation("VerificadorCondicionamiento")
+  auditorias            Auditoria[]
+  variablesRegistradas  VariableIndicador[]
+  indicadoresCalculados RegistroIndicador[]
+  alertasAtendidas      AlertaIndicador[]   @relation("AtendidaPor")
+
+  @@map("users")
+}
+
+model Facultad {
+  id       String   @id @default(cuid())
+  nombre   String
+  codigo   String   @unique
+  decanoId String?
+  activo   Boolean  @default(true)
+
+  // Relaciones
+  decano   User?    @relation("DecanoFacultad", fields: [decanoId], references: [id], onDelete: SetNull)
+  carreras Carrera[]
+
+  @@map("facultades")
+}
+
+model Carrera {
+  id             String   @id @default(cuid())
+  nombre         String
+  codigo         String   @unique
+  facultadId     String
+  coordinadorId  String?
+  fechaCreacion  DateTime @default(now())
+  activo         Boolean  @default(true)
+
+  // Relaciones
+  facultad         Facultad           @relation(fields: [facultadId], references: [id], onDelete: Restrict)
+  coordinador      User?              @relation("CoordinadorCarrera", fields: [coordinadorId], references: [id], onDelete: SetNull)
+  acreditaciones   Acreditacion[]
+  registros        RegistroIndicador[]
+  variables        VariableIndicador[]
+
+  @@map("carreras")
+}
+
+// =============================================================
+// ENTIDADES CORE DE ACREDITACIÓN
+// =============================================================
+
+model Acreditacion {
+  id                  String             @id @default(cuid())
+  carreraId           String
+  entidadAcreditadora String             @default("SINEACE")
+  modelo              String             @default("Modelo CONEAU 2025")
+  estado              EstadoAcreditacion @default(SOLICITUD)
+  fechaInicio         DateTime           @default(now())
+  fechaFinEstimada    DateTime?
+  fechaFinReal        DateTime?
+  resultado       String?
+  observaciones   String?
+  createdById     String
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  // Relaciones
+  carrera          Carrera            @relation(fields: [carreraId], references: [id], onDelete: Restrict)
+  creadoPor        User               @relation("CreadorAcreditacion", fields: [createdById], references: [id], onDelete: Restrict)
+  evidencias       Evidencia[]
+  autoevaluaciones Autoevaluacion[]
+  evaluaciones     EvaluacionExterna[]
+  condicionamientos Condicionamiento[]
+
+  // Índices
+  @@index([carreraId, estado])
+  @@index([fechaFinEstimada])
+  @@map("acreditaciones")
+}
+
+model Evidencia {
+  id             String   @id @default(cuid())
+  acreditacionId String
+  tipo           String
+  descripcion    String
+  archivoUrl     String
+  version        Int      @default(1)
+  subidoPorId    String
+  createdAt      DateTime @default(now())
+
+  // Relaciones
+  acreditacion Acreditacion @relation(fields: [acreditacionId], references: [id], onDelete: Restrict)
+  subidoPor    User         @relation(fields: [subidoPorId], references: [id], onDelete: Restrict)
+
+  @@index([acreditacionId])
+  @@map("evidencias")
+}
+
+model EstandarSineace {
+  id          String   @id @default(cuid())
+  codigo      String   @unique
+  nombre      String
+  descripcion String
+  activo      Boolean  @default(true)
+
+  // Relaciones
+  autoevaluaciones Autoevaluacion[]
+  indicadores      IndicadorSineace[]
+
+  @@map("estandares_sineace")
+}
+
+model Autoevaluacion {
+  id               String   @id @default(cuid())
+  acreditacionId   String
+  estandarSineaceId String
+  puntaje          Decimal  @db.Decimal(5, 2)
+  observaciones    String?
+  evaluadorId      String
+  fechaEvaluacion  DateTime @default(now())
+
+  // Relaciones
+  acreditacion   Acreditacion    @relation(fields: [acreditacionId], references: [id], onDelete: Restrict)
+  estandar       EstandarSineace @relation(fields: [estandarSineaceId], references: [id], onDelete: Restrict)
+  evaluador      User            @relation(fields: [evaluadorId], references: [id], onDelete: Restrict)
+
+  @@map("autoevaluaciones")
+}
+
+model EvaluacionExterna {
+  id             String    @id @default(cuid())
+  acreditacionId String
+  fechaVisita    DateTime
+  evaluadores    Json
+  informeUrl     String?
+  observaciones  String?
+  resultado      String?
+  createdById    String
+  createdAt      DateTime  @default(now())
+
+  // Relaciones
+  acreditacion Acreditacion @relation(fields: [acreditacionId], references: [id], onDelete: Restrict)
+  creadoPor    User         @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@map("evaluaciones_externas")
+}
+
+model Condicionamiento {
+  id                String                 @id @default(cuid())
+  acreditacionId    String
+  descripcion       String
+  plazoDias         Int
+  fechaCumplimiento DateTime?
+  estado            EstadoCondicionamiento @default(PENDIENTE)
+  verificadoPorId   String?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  // Relaciones
+  acreditacion  Acreditacion @relation(fields: [acreditacionId], references: [id], onDelete: Restrict)
+  verificadoPor User?        @relation("VerificadorCondicionamiento", fields: [verificadoPorId], references: [id], onDelete: SetNull)
+
+  @@map("condicionamientos")
+}
+
+// =============================================================
+// AUDITORÍA
+// =============================================================
+
+model Auditoria {
+  id            String          @id @default(cuid())
+  tabla         String
+  registroId    String
+  accion        AccionAuditoria
+  campo         String?
+  valorAnterior String?
+  valorNuevo    String?
+  usuarioId     String?
+  fecha         DateTime        @default(now())
+
+  // Relaciones
+  usuario User? @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+
+  @@index([fecha(sort: Desc)])
+  @@index([tabla, registroId])
+  @@map("auditorias")
+}
+
+// =============================================================
+// ENTIDADES DE INDICADORES SINEACE 2025 (NUEVAS — OBLIGATORIAS)
+// =============================================================
+
+/// Catálogo maestro de los 29 indicadores del Modelo CONEAU 2025
+model IndicadorSineace {
+  id                String            @id @default(cuid())
+  codigo            String            @unique  // "ID1" – "ID29"
+  nombre            String
+  tipoDato          TipoDato
+  estandarId        String
+  criterios         Json              // Array de códigos de criterios
+  objetivo          String
+  valorReferencial  String            // Ej: "≥ 60%", "≤ 2 años"
+  interpretacion    String
+  fuenteInformacion String
+  frecuenciaCalculo FrecuenciaCalculo
+  formulaCalculo    String            // Texto con nombres de variables
+  variables         Json              // Descripción de cada variable
+  notas             String?
+  activo            Boolean           @default(true)
+
+  // Relaciones
+  estandar  EstandarSineace   @relation(fields: [estandarId], references: [id], onDelete: Restrict)
+  registros RegistroIndicador[]
+  variablesIndicador VariableIndicador[]
+  alertas   AlertaIndicador[]  @relation("AlertasIndicador")
+
+  @@index([estandarId])
+  @@map("indicadores_sineace")
+}
+
+/// Valores calculados por carrera y periodo
+model RegistroIndicador {
+  id                  String   @id @default(cuid())
+  carreraId           String
+  indicadorId         String
+  periodo             String   // Ej: "2024-I", "2024-II", "2024"
+  valorCalculado      Decimal  @db.Decimal(10, 4)
+  valorReferencial    String
+  cumpleReferencial   Boolean
+  observaciones       String?
+  variablesUtilizadas Json     // Snapshot de valores usados en el cálculo
+  calculadoPorId      String
+  fechaCalculo        DateTime @default(now())
+  fechaActualizacion  DateTime @updatedAt
+  evidenciaUrl        String?
+
+  // Relaciones
+  carrera      Carrera          @relation(fields: [carreraId], references: [id], onDelete: Restrict)
+  indicador    IndicadorSineace @relation(fields: [indicadorId], references: [id], onDelete: Restrict)
+  calculadoPor User             @relation(fields: [calculadoPorId], references: [id], onDelete: Restrict)
+  alertas      AlertaIndicador[]
+
+  // Índice único compuesto: una sola entrada por carrera+indicador+periodo
+  @@unique([carreraId, indicadorId, periodo])
+  @@map("registros_indicadores")
+}
+
+/// Valores de entrada para los cálculos de indicadores
+model VariableIndicador {
+  id             String   @id @default(cuid())
+  carreraId      String
+  indicadorId    String
+  periodo        String
+  nombreVariable String   // Coincide con clave en IndicadorSineace.variables JSON
+  valorNumerico  Decimal  @db.Decimal(10, 4)
+  fuenteDato     String   // "encuesta" | "sistema_academico" | "registro_manual" | etc.
+  verificadoPorId String
+  fechaRegistro  DateTime @default(now())
+
+  // Relaciones
+  carrera      Carrera          @relation(fields: [carreraId], references: [id], onDelete: Restrict)
+  indicador    IndicadorSineace @relation(fields: [indicadorId], references: [id], onDelete: Restrict)
+  verificadoPor User            @relation(fields: [verificadoPorId], references: [id], onDelete: Restrict)
+
+  // Índice único compuesto: un valor por variable+carrera+indicador+periodo
+  @@unique([carreraId, indicadorId, periodo, nombreVariable])
+  @@map("variables_indicadores")
+}
+
+/// Alertas generadas cuando un indicador no cumple su valor referencial
+model AlertaIndicador {
+  id                  String     @id @default(cuid())
+  registroIndicadorId String
+  indicadorId         String     // Desnormalizado para filtros eficientes
+  tipoAlerta          TipoAlerta
+  mensaje             String
+  fechaGeneracion     DateTime   @default(now())
+  atendida            Boolean    @default(false)
+  atendidaPorId       String?
+  fechaAtencion       DateTime?
+  observacionAtencion String?
+
+  // Relaciones
+  registro     RegistroIndicador @relation(fields: [registroIndicadorId], references: [id], onDelete: Restrict)
+  indicador    IndicadorSineace  @relation("AlertasIndicador", fields: [indicadorId], references: [id], onDelete: Restrict)
+  atendidaPor  User?             @relation("AtendidaPor", fields: [atendidaPorId], references: [id], onDelete: SetNull)
+
+  @@index([atendida, fechaGeneracion])
+  @@index([indicadorId])
+  @@map("alertas_indicadores")
+}
